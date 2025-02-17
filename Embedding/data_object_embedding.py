@@ -10,25 +10,30 @@ from scipy.stats import entropy
 
 
 class DataObjectEmbedding:
-    def __init__(self, base_vector , max_vector_size=1000):
-        self.base_vector = base_vector
+    def __init__(self, base_vector=None, max_vector_size=1000):
+        self.base_vector = base_vector if base_vector is not None else np.array([])
         self.transaction_vectors = []
         self.child_vectors = []
         self.max_vector_size = max_vector_size
         self.vector = self.base_vector
-
-    def add_transaction(self, transaction_vector):
-        self.transaction_vectors.append(transaction_vector)
-        self.update_vector()
+        def add_transaction(self, transaction_vector):
+            self.transaction_vectors.append(transaction_vector)
+            self.update_vector()
 
     def update_vector(self):
-        combined_vector = np.concatenate([self.base_vector] + self.transaction_vectors)
-        if len(combined_vector) > self.max_vector_size:
-            self.split_vector(combined_vector)
-        else:
-            self.vector = combined_vector
+        """Update the vector representation of the data object."""
+        # check if the base vector is not None
+        if base_vector is not None:
+            combined_vector = np.concatenate([self.base_vector] + self.transaction_vectors)
+            if len(combined_vector) > self.max_vector_size:
+                self.split_vector(combined_vector)
+            else:
+                self.vector = combined_vector
 
     def split_vector(self, combined_vector):
+        """Split the combined vector into the main vector and child vectors.
+        This is done to prevent the main vector from exceeding the maximum size."""
+        # check vector size
         split_point = self.max_vector_size
         self.vector = combined_vector[:split_point]
         child_vector = combined_vector[split_point:]
