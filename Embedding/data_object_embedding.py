@@ -15,14 +15,14 @@ class DataObjectEmbedding:
         self.transaction_vectors = []
         self.child_vectors = []
         self.max_vector_size = max_vector_size
-        self.vector = self.base_vector
-        def add_transaction(self, transaction_vector):
-            self.transaction_vectors.append(transaction_vector)
-            self.update_vector()
+        self.vector = self.base_vector.copy() if base_vector is not None else np.array([])
+        self.transaction_embedder = transaction_embedding.TransactionEmbedding()
+        self.vector_solidness = VectorSolidness(self.vector)
 
+
+ 
     def update_vector(self, transaction_data):
-        transaction_embedder = transaction_embedding.TransactionEmbedding()
-        transaction_vector = transaction_embedder.encode_transaction(transaction_data)
+        transaction_vector = self.transaction_embedder.encode_transaction(transaction_data)
         
         if self.base_vector.size == 0:
             self.base_vector = transaction_vector
@@ -30,21 +30,18 @@ class DataObjectEmbedding:
             self.transaction_vectors.append(transaction_vector)
         
         combined_vector = np.concatenate([self.base_vector] + self.transaction_vectors)
+        
         if len(combined_vector) > self.max_vector_size:
-            self.split_vector(combined_vector)
+            vector_splitter = VectorSplitting(combined_vector, self.max_vector_size)
+            self.vector, new_child_vectors = vector_splitter.split_vector()
+            self.child_vectors.extend(new_child_vectors)
         else:
             self.vector = combined_vector
         
+        self.recalculate_solidness()
 
 
-    def split_vector(self, combined_vector):
-        """Split the combined vector into the main vector and child vectors.
-        This is done to prevent the main vector from exceeding the maximum size."""
-        # check vector size
-        split_point = self.max_vector_size
-        self.vector = combined_vector[:split_point]
-        child_vector = combined_vector[split_point:]
-        self.child_vectors.append(child_vector)
+        
 
     def get_full_vector(self):
         return np.concatenate([self.vector] + self.child_vectors)
@@ -134,13 +131,6 @@ class VectorSolidness:
         return initial_solidness
     
 
-# Create instances of the embedding classes
-customer_embedder = text_embedding.TextEmbedding()
-time_stamp_embedder = time_stamp_embedding.TimeStampEmbedding()
-
-# Encode customer data and time stamp
-customer_vector = customer_embedder.encode_customer(text_embedding.customer_data)
-time_stamp_vector = time_stamp_embedder.encode(time_stamp_embedding.timestamp)
 
 base_vector = np.array([
     -2.99544614e-02,  7.74931312e-02,  1.15252109e-02, -8.04022700e-02,
@@ -266,35 +256,5 @@ class VectorSplitting:
             self.main_vector = self.combined_vector
             return self.combined_vector, []
 
-# # Combine vectors  
-# data_object_embedding = DataObjectEmbedding(base_vector= base_vector)
-# combined_vector = data_object_embedding.combine_vectors(customer_vector, time_stamp_vector)
-# print(combined_vector)
 
-# # Calculate solidness
-# vector_solidness = VectorSolidness(combined_vector) 
-# solidness = vector_solidness.calculate_solidness()  
-# print(f"solidness{solidness}")
 
-# Voorbeeld code (in een apart testbestand of verwijderen)
-if __name__ == "__main__":
-    # Create instances of the embedding classes
-    customer_embedder = text_embedding.TextEmbedding()
-    time_stamp_embedder = time_stamp_embedding.TimeStampEmbedding()
-
-    # Encode customer data and time stamp
-    customer_data = "voorbeeld customer data"  # Define customer_data
-    timestamp = "2024-01-01"  # Define timestamp
-    customer_vector = customer_embedder.encode_customer(customer_data)
-    time_stamp_vector = time_stamp_embedder.encode(timestamp)
-
-    # Combine vectors
-    base_vector = np.array([0.1] * 200)  # Voorbeeld base vector
-    data_object_embedding = DataObjectEmbedding(base_vector=base_vector, max_vector_size=300)
-    combined_vector = data_object_embedding.combine_vectors(customer_vector, time_stamp_vector)
-    print(combined_vector)
-
-    # Calculate solidness
-    data_object_embedding.calculate_solidness()
-    solidness = data_object_embedding.solidness
-    print(f"solidness: {solidness}")
