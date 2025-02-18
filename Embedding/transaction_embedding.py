@@ -2,7 +2,7 @@
 Using timestamp vectors, these transactions will be added to the data object vector.
 In this way, the data object vector will contain information about the transactions made by the data object."""
 
-class TimeStampEmbedding:   
+class TransactionEmbedding:   
     def __init__(self, vector_size=10):
         self.vector_size = vector_size 
         self.vector = None  
