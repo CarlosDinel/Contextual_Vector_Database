@@ -1,5 +1,4 @@
 import numpy as np
-from sentence_transformers import SentenceTransformer
 from datetime import datetime
 
 class TimeStampEmbedding:
@@ -73,12 +72,37 @@ class TimeStampEmbedding:
         
         return datetime(year, month, day, hour, minute, second)
 
-# Example usage
-ts_embedder = TimeStampEmbedding()
-timestamp = "2023-06-15 14:30:00"
-encoded = ts_embedder.encode(timestamp)
-decoded = ts_embedder.decode(encoded)
+    def extract_features(self, time_stamp):
+        """
+        Extract features from the time stamp.
 
-print(f"Original: {timestamp}")
-print(f"Encoded: {encoded}")
-print(f"Decoded: {decoded}")
+        Args:
+            time_stamp (str or datetime): The time stamp to extract features from.
+
+        Returns:
+            dict: A dictionary of extracted features from the time stamp.
+        """
+        if isinstance(time_stamp, str):
+            time_stamp = datetime.fromisoformat(time_stamp)
+        
+        features = {
+            'year': time_stamp.year,
+            'month': time_stamp.month,
+            'day': time_stamp.day,
+            'hour': time_stamp.hour,
+            'minute': time_stamp.minute,
+            'second': time_stamp.second,
+        }
+        
+        return features
+
+# Example usage
+# ts_embedder = TimeStampEmbedding()
+# timestamp = "2023-06-15 14:30:00"
+# encoded = ts_embedder.encode(timestamp)
+# decoded = ts_embedder.decode(encoded)
+
+# print(f"Original: {timestamp}")
+# print(f"Encoded: {encoded}")
+# print(f"Decoded: {decoded}")
+

@@ -6,8 +6,10 @@ import text_embedding
 import transaction_embedding     
 import time_stamp_embedding
 from scipy.stats import entropy
+import logging
 
-
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class DataObjectEmbedding:
     def __init__(self, base_vector=None, max_vector_size=1000):
@@ -19,8 +21,6 @@ class DataObjectEmbedding:
         self.transaction_embedder = transaction_embedding.TransactionEmbedding()
         self.vector_solidness = VectorSolidness(self.vector)
 
-
- 
     def update_vector(self, transaction_data):
         transaction_vector = self.transaction_embedder.encode_transaction(transaction_data)
         
@@ -39,9 +39,10 @@ class DataObjectEmbedding:
             self.vector = combined_vector
         
         self.recalculate_solidness()
+        self.log_change(transaction_data)
 
-
-        
+    def recalculate_solidness(self):
+        self.vector_solidness = VectorSolidness(self.get_full_vector())
 
     def get_full_vector(self):
         return np.concatenate([self.vector] + self.child_vectors)
@@ -52,11 +53,6 @@ class DataObjectEmbedding:
         for i in range(len(self.child_vectors)):
             self.child_vectors[i] += displacement
 
-
-    def initialise_attributes(self, name="", age=0, location=""):    
-        """Initialise the attributes of the data object."""
-        return {"name": "", "age": 0, "location": ""}
-    
     def combine_vectors(self, customer_vector, time_stamp_vector=None): 
         """Combines vectors into a single representation."""
         data_object_vector =  np.concatenate([customer_vector, time_stamp_vector])  
@@ -64,19 +60,8 @@ class DataObjectEmbedding:
 
     def calculate_solidness(self): 
         """Calculates the solidness of the data object.
-        formula = S(V_i) = 1 / (1 + e^(-k(I_i - I_0)))
-        where:The concept of Vector Solidness you've described is an innovative approach to 
-        quantifying the stability of vectors in dynamic vector spaces. This method is particularly 
-        relevant for Contextual Vector Databases (CVDs) and could be applied in various fields, 
-        including cardiovascular disease (CVD) risk prediction and cumulative 
-        impact assessments in marine environments."""
-
-        # initial solidness
-        if self.vector_solidness(self):
-            self.solidness = self.vector_solidness.calculate_solidness()   
-        # update solidness
-        else:
-            self.solidness = self.vector_solidness.calculate_solidness()    
+        """
+        self.solidness = self.vector_solidness.calculate_solidness()   
         return self.solidness   
 
     
@@ -91,6 +76,10 @@ class DataObjectEmbedding:
     def unlock_vector(self):
         """Unlocks the vector, allowing modifications."""
         return None
+    
+    def log_change(self, transaction_data):
+        """Logs changes to the data object."""
+        logging.info(f"Data object updated with transaction: {transaction_data}")
 
 
 class VectorSolidness: 
@@ -129,7 +118,35 @@ class VectorSolidness:
         age = self.calculate_solidness_age()
         initial_solidness = (magnitude + entropy + sparsity + age) / 4
         return initial_solidness
+
+
+class VectorSplitting:
+    def __init__(self, vector, max_vector_size):
+        self.vector = vector
+        self.max_vector_size = max_vector_size
+
+    def split_vector(self):
+        main_vector = self.vector[:self.max_vector_size]
+        child_vectors = [self.vector[self.max_vector_size:]]
+        return main_vector, child_vectors
     
+# class VectorSplitting: 
+#     """Splits a vector into a main vector and child vectors."""
+#     def __init__(self, combined_vector, max_vector_size=1000): 
+#         self.combined_vector = combined_vector
+#         self.max_vector_size = max_vector_size
+    
+#     def split_vector(self): 
+#         """Split the combined vector into the main vector and child vectors."""
+#         # Check vector size
+#         if len(self.combined_vector) > self.max_vector_size: 
+#             split_point = self.max_vector_size
+#             main_vector = self.combined_vector[:split_point]
+#             child_vector = self.combined_vector[split_point:]
+#             return main_vector, [child_vector] # return as a list
+#         else: 
+#             return self.combined_vector, []
+
 
 
 base_vector = np.array([
@@ -232,29 +249,3 @@ base_vector = np.array([
      6.74333333e-01,  5.00000000e-01,  4.83870968e-01,  5.83333333e-01,
   5.00000000e-01,  0.00000000e+00,  1.22464680e-16, -1.00000000e+00,
   1.01168322e-01, -9.94869323e-01])
-
-
-
-class VectorSplitting: 
-    """Splits a vector into a main vector and child vectors."""
-    def __init__(self, combined_vector, max_vector_size=1000): 
-        self.combined_vector = combined_vector
-        self.max_vector_size = max_vector_size
-        self.main_vector = None
-        self.child_vectors = []
-    
-    def split_vector(self): 
-        """Split the combined vector into the main vector and child vectors."""
-        # Check vector size
-        if len(self.combined_vector) > self.max_vector_size: 
-            split_point = self.max_vector_size
-            self.main_vector = self.combined_vector[:split_point]
-            child_vector = self.combined_vector[split_point:]
-            self.child_vectors.append(child_vector)
-            return self.main_vector, self.child_vectors 
-        else: 
-            self.main_vector = self.combined_vector
-            return self.combined_vector, []
-
-
-
