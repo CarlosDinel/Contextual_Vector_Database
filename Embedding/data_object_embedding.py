@@ -12,7 +12,7 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class DataObjectEmbedding:
-    def __init__(self, base_vector=None, max_vector_size=1000):
+    def __init__(self, base_vector=None, max_vector_size=1024):
         self.base_vector = base_vector if base_vector is not None else np.array([])
         self.transaction_vectors = []
         self.child_vectors = []
@@ -56,7 +56,26 @@ class DataObjectEmbedding:
     def combine_vectors(self, customer_vector, time_stamp_vector=None): 
         """Combines vectors into a single representation."""
         data_object_vector =  np.concatenate([customer_vector, time_stamp_vector])  
-        return data_object_vector     
+        return data_object_vector 
+
+
+    def pad_vector(vector, target_dim):
+        """
+        Pads a vector with zeros if it is shorter than the target dimension.
+        """
+        target_dim = int(1024) 
+        if len(vector) < target_dim:
+            return np.pad(vector, (0, target_dim - len(vector)), 'constant')
+        return vector[:target_dim]  # Truncate if too long
+
+
+    def normalize_vector_dimension(self, vector, target_dimension):
+        """Normalizes the vector to a target dimension."""
+        if len(vector) < target_dimension:
+            normalized_vector = np.pad(vector, (0, target_dimension - len(vector)))
+        else:
+            normalized_vector = vector[:target_dimension]
+        return normalized_vector
 
     def calculate_solidness(self): 
         """Calculates the solidness of the data object.
@@ -130,6 +149,10 @@ class VectorSplitting:
         child_vectors = [self.vector[self.max_vector_size:]]
         return main_vector, child_vectors
     
+    def connect_vectors(self, vectors):
+        return np.concatenate(vectors)
+    
+
 # class VectorSplitting: 
 #     """Splits a vector into a main vector and child vectors."""
 #     def __init__(self, combined_vector, max_vector_size=1000): 
