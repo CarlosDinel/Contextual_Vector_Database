@@ -1,6 +1,5 @@
 import numpy as np
 import logging
-from typing import Dict
 
 logger = logging.getLogger(__name__)
 
@@ -8,23 +7,18 @@ class PositionEncoder:
     """
     Encodes and decodes vector positions in the contextual space.
     """
-    def __init__(self, 
-                 dimensions: int = 3, 
-                 encoding_method: str = 'direct',
-                 learning_rate: float = 0.1):
+    def __init__(self, dimensions=3, encoding_method='direct'):
         """
         Initialize the position encoder.
         
         Args:
             dimensions: Number of dimensions in the vector space
             encoding_method: Method to encode positions ('direct', 'normalized', 'spherical')
-            learning_rate: Learning rate for position updates
         """
         self.dimensions = dimensions
         self.encoding_method = encoding_method
-        self.learning_rate = learning_rate
         
-    def encode_position(self, vector_data: np.ndarray) -> np.ndarray:
+    def encode_position(self, vector_data):
         """
         Encode vector data into a position representation.
         
@@ -44,7 +38,7 @@ class PositionEncoder:
             logger.warning(f"Unknown encoding method: {self.encoding_method}, using direct encoding")
             return self._direct_encoding(vector_data)
     
-    def decode_position(self, encoded_position: np.ndarray) -> np.ndarray:
+    def decode_position(self, encoded_position):
         """
         Decode position representation back to vector data.
         
@@ -64,74 +58,15 @@ class PositionEncoder:
             logger.warning(f"Unknown encoding method: {self.encoding_method}, using direct decoding")
             return self._direct_decoding(encoded_position)
     
-    def update_position(self, 
-                       current_position: np.ndarray, 
-                       influences: Dict[str, float],
-                       all_positions: Dict[str, np.ndarray]) -> np.ndarray:
-        """
-        Update vector position based on influences.
-        
-        Args:
-            current_position: Current encoded position
-            influences: Dictionary mapping vector IDs to influence scores
-            all_positions: Dictionary mapping vector IDs to their encoded positions
-            
-        Returns:
-            Updated encoded position
-        """
-        # Calculate weighted average direction
-        update_vector = np.zeros_like(current_position)
-        total_weight = 0.0
-        
-        for vec_id, influence in influences.items():
-            if vec_id in all_positions:
-                other_position = all_positions[vec_id]
-                
-                # Calculate direction and weight
-                direction = other_position - current_position
-                weight = influence
-                
-                # Add to update vector
-                update_vector += direction * weight
-                total_weight += weight
-        
-        # Normalize and apply learning rate
-        if total_weight > 0:
-            update_vector = update_vector / total_weight
-            update_vector = update_vector * self.learning_rate
-            
-            # Apply update
-            new_position = current_position + update_vector
-            
-            # Ensure position stays within bounds
-            new_position = self._clip_position(new_position)
-            
-            return new_position
-        
-        return current_position
-    
-    def _clip_position(self, position: np.ndarray) -> np.ndarray:
-        """
-        Clip position to ensure it stays within reasonable bounds.
-        
-        Args:
-            position: Position to clip
-            
-        Returns:
-            Clipped position
-        """
-        # This is a simple implementation - adjust bounds as needed
-        return np.clip(position, -10.0, 10.0)
-    
-    def _direct_encoding(self, vector_data: np.ndarray) -> np.ndarray:
+    def _direct_encoding(self, vector_data):
         """Direct encoding - no transformation"""
         return np.array(vector_data)
     
-    def _direct_decoding(self, encoded_position: np.ndarray) -> np.ndarray:
+    def _direct_decoding(self, encoded_position):
         """Direct decoding - no transformation"""
         return np.array(encoded_position)
     
-    def _normalized_encoding(self, vector_data: np.ndarray) -> np.ndarray:
+    def _normalized_encoding(self, vector_data):
         """Normalize vector to unit length"""
         vector = np.array(vector_data)
         norm = np.linalg.norm(vector)
@@ -139,11 +74,11 @@ class PositionEncoder:
             return vector / norm
         return vector
     
-    def _normalized_decoding(self, encoded_position: np.ndarray) -> np.ndarray:
+    def _normalized_decoding(self, encoded_position):
         """No special decoding needed for normalized vectors"""
         return np.array(encoded_position)
     
-    def _spherical_encoding(self, vector_data: np.ndarray) -> np.ndarray:
+    def _spherical_encoding(self, vector_data):
         """Convert to spherical coordinates"""
         vector = np.array(vector_data)
         
@@ -164,7 +99,7 @@ class PositionEncoder:
             logger.warning(f"Spherical encoding not implemented for {len(vector)} dimensions, using direct encoding")
             return vector
     
-    def _spherical_decoding(self, encoded_position: np.ndarray) -> np.ndarray:
+    def _spherical_decoding(self, encoded_position):
         """Convert from spherical coordinates back to Cartesian"""
         encoded = np.array(encoded_position)
         

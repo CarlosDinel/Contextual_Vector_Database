@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Contextual Vector Database Demo</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            padding: 20px;
+        }
+        .vector-container {
+            margin-top: 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+        }
+        .vector-item {
+            margin-bottom: 10px;
+            padding: 10px;
+            border-radius: 5px;
+            background-color: #f8f9fa;
+        }
+        .vector-controls {
+            margin-bottom: 20px;
+        }
+        .visualization {
+            width: 100%;
+            height: 500px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .context-links line {
+            stroke: #999;
+            stroke-opacity: 0.6;
+        }
+        .context-links line.strong {
+            stroke-width: 2;
+            stroke-opacity: 0.8;
+        }
+        .vector-nodes circle {
+            stroke: #fff;
+            stroke-width: 1.5px;
+        }
+        .vector-label {
+            font-size: 10px;
+            text-anchor: middle;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="mb-4">Contextual Vector Database Demo</h1>
+        
+        <div class="row">
+            <div class="col-md-8">
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h5>Vector Visualization</h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="visualization" class="visualization"></div>
+                        <div class="d-flex justify-content-between">
+                            <button id="toggleView" class="btn btn-outline-primary">Toggle 2D/3D View</button>
+                            <div>
+                                <button id="reembedBtn" class="btn btn-primary">Reembed Vectors</button>
+                                <button id="resetBtn" class="btn btn-secondary">Reset</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-4">
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h5>Add New Vector</h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="addVectorForm">
+                            <div class="mb-3">
+                                <label for="x" class="form-label">X Coordinate</label>
+                                <input type="number" class="form-control" id="x" step="0.1" min="0" max="1" value="0.5">
+                            </div>
+                            <div class="mb-3">
+                                <label for="y" class="form-label">Y Coordinate</label>
+                                <input type="number" class="form-control" id="y" step="0.1" min="0" max="1" value="0.5">
+                            </div>
+                            <div class="mb-3">
+                                <label for="z" class="form-label">Z Coordinate</label>
+                                <input type="number" class="form-control" id="z" step="0.1" min="0" max="1" value="0.5">
+                            </div>
+                            <div class="mb-3">
+                                <label for="solidness" class="form-label">Solidness (0.01-0.99) </label>
+                                <input type="range" class="form-range" id="solidness" min="0.01" max="0.99" step="0.01" value="0.5">
+                                <div class="d-flex justify-content-between">
+                                    <small>Flexible</small>
+                                    <small id="solidnessValue">0.5</small>
+                                    <small>Solid</small>
+                                </div>
+                            </div>
+                            <button type="submit" class="btn btn-success w-100">Add Vector</button>
+                        </form>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Vector Details</h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="vectorDetails">
+                            <p>Select a vector to see details</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="row">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>All Vectors</h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="vectorList" class="vector-container">
+                            <p>Loading vectors...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Global variables
+        let vectors = [];
+        let contextMap = {};
+        let is3DView = true;
+        let simulation;
+        
+        // DOM elements
+        const visualizationEl = document.getElementById('visualization');
+        const vectorListEl = document.getElementById('vectorList');
+        const vectorDetailsEl = document.getElementById('vectorDetails');
+        const toggleViewBtn = document.getElementById('toggleView');
+        const reembedBtn = document.getElementById('reembedBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const addVectorForm = document.getElementById('addVectorForm');
+        const solidnessInput = document.getElementById('solidness');
+        const solidnessValue = document.getElementById('solidnessValue');
+        
+        // Update solidness value display
+        solidnessInput.addEventListener('input', () => {
+            solidnessValue.textContent = solidnessInput.value;
+        });
+        
+        // Toggle 2D/3D view
+        toggleViewBtn.addEventListener('click', () => {
+            is3DView = !is3DView;
+            updateVisualization();
+        });
+        
+        // Reembed vectors
+        reembedBtn.addEventListener('click', async () => {
+            try {
+                reembedBtn.disabled = true;
+                reembedBtn.textContent = 'Reembedding...';
+                
+                const response = await fetch('/api/reembed', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                if (response.ok) {
+                    vectors = await response.json();
+                    await fetchContext();
+                    updateVisualization();
+                    updateVectorList();
+                } else {
+                    console.error('Failed to reembed vectors');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+            } finally {
+                reembedBtn.disabled = false;
+                reembedBtn.textContent = 'Reembed Vectors';
+            }
+        });
+        
+        // Reset demo
+        resetBtn.addEventListener('click', () => {
+            location.reload();
+        });
+        
+        // Add new vector
+        addVectorForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const x = parseFloat(document.getElementById('x').value);
+            const y = parseFloat(document.getElementById('y').value);
+            const z = parseFloat(document.getElementById('z').value);
+            const solidness = parseFloat(document.getElementById('solidness').value);
+            
+            try {
+                const response = await fetch('/api/add_vector', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        data: [x, y, z],
+                        solidness: solidness
+                    })
+                });
+                
+                if (response.ok) {
+                    await fetchVectors();
+                    await fetchContext();
+                    updateVisualization();
+                    updateVectorList();
+                    
+                    // Reset form
+                    document.getElementById('x').value = 0.5;
+                    document.getElementById('y').value = 0.5;
+                    document.getElementById('z').value = 0.5;
+                    document.getElementById('solidness').value = 0.5;
+                    solidnessValue.textContent = '0.5';
+                } else {
+                    console.error('Failed to add vector');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+            }
+        });
+        
+        // Fetch vectors from API
+        async function fetchVectors() {
+            try {
+                const response = await fetch('/api/vectors');
+                if (response.ok) {
+                    vectors = await response.json();
+                } else {
+                    console.error('Failed to fetch vectors');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+            }
+        }
+        
+        // Fetch context information
+        async function fetchContext() {
+            try {
+                const response = await fetch('/api/context');
+                if (response.ok) {
+                    contextMap = await response.json();
+                } else {
+                    console.error('Failed to fetch context');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+            }
+        }
+        
+        // Update vector list display
+        function updateVectorList() {
+            vectorListEl.innerHTML = '';
+            
+            vectors.forEach(vector => {
+                const vectorEl = document.createElement('div');
+                vectorEl.className = 'vector-item';
+                vectorEl.innerHTML = `
+                    <h6>Vector ${vector.id}</h6>
+                    <p>Position: [${vector.data.map(d => d.toFixed(3)).join(', ')}]</p>
+                    <p>Solidness: ${vector.solidness.toFixed(2)}</p>
+                `;
+                
+                vectorEl.addEventListener('click', () => {
+                    showVectorDetails(vector);
+                });
+                
+                vectorListEl.appendChild(vectorEl);
+            });
+        }
+        
+        // Show vector details
+        function showVectorDetails(vector) {
+            const context = contextMap[vector.id] || [];
+            
+            let contextHtml = '<ul>';
+            context.forEach(([relatedId, impact]) => {
+                contextHtml += `<li>${relatedId}: Impact ${impact.toFixed(3)}</li>`;
+            });
+            contextHtml += '</ul>';
+            
+            vectorDetailsEl.innerHTML = `
+                <h6>Vector ${vector.id}</h6>
+                <p>Position: [${vector.data.map(d => d.toFixed(3)).join(', ')}]</p>
+                <p>Solidness: ${vector.solidness.toFixed(2)}</p>
+                <h6>Context:</h6>
+                ${context.length > 0 ? contextHtml : '<p>No context relationships</p>'}
+            `;
+        }
+        
+        // Update visualization
+        function updateVisualization() {
+            visualizationEl.innerHTML = '';
+            
+            if (is3DView) {
+                create3DVisualization();
+            } else {
+                create2DVisualization();
+            }
+        }
+        
+        // Create 2D visualization using D3
+        function create2DVisualization() {
+            const width = visualizationEl.clientWidth;
+            const height = visualizationEl.clientHeight;
+            
+            const svg = d3.select('#visualization')
+                .append('svg')
+                .attr('width', width)
+                .attr('height', height);
+            
+            // Create links from context relationships
+            const links = [];
+            Object.entries(contextMap).forEach(([sourceId, impacts]) => {
+                impacts.forEach(([targetId, impact]) => {
+                    const source = vectors.find(v => v.id === sourceId);
+                    const target = vectors.find(v => v.id === targetId);
+                    
+                    if (source && target) {
+                        links.push({
+                            source,
+                            target,
+                            impact
+                        });
+                    }
+                });
+            });
+            
+            // Create force simulation
+            simulation = d3.forceSimulation(vectors)
+                .force('link', d3.forceLink(links).id(d => d.id))
+                .force('charge', d3.forceManyBody().strength(-50))
+                .force('center', d3.forceCenter(width / 2, height / 2));
+            
+            // Draw links
+            const link = svg.append('g')
+                .attr('class', 'context-links')
+                .selectAll('line')
+                .data(links)
+                .enter().append('line')
+                .attr('class', d => d.impact > 0.5 ? 'strong' : '')
+                .style('stroke-width', d => Math.max(1, d.impact * 3));
+            
+            // Draw nodes
+            const node = svg.append('g')
+                .attr('class', 'vector-nodes')
+                .selectAll('circle')
+                .data(vectors)
+                .enter().append('circle')
+                .attr('r', d => 5 + d.solidness * 10)
+                .attr('fill', (d, i) => d3.schemeCategory10[i % 10])
+                .call(d3.drag()
+                    .on('start', dragstarted)
+                    .on('drag', dragged)
+                    .on('end', dragended));
+            
+            // Add labels
+            const label = svg.append('g')
+                .attr('class', 'vector-labels')
+                .selectAll('text')
+                .data(vectors)
+                .enter().append('text')
+                .attr('class', 'vector-label')
+                .text(d => d.id);
+            
+            // Update positions on tick
+            simulation.on('tick', () => {
+                link
+                    .attr('x1', d => d.source.x)
+                    .attr('y1', d => d.source.y)
+                    .attr('x2', d => d.target.x)
+                    .attr('y2', d => d.target.y);
+                
+                node
+                    .attr('cx', d => d.x = Math.max(10, Math.min(width - 10, d.x)))
+                    .attr('cy', d => d.y = Math.max(10, Math.min(height - 10, d.y)));
+                
+                label
+                    .attr('x', d => d.x)
+                    .attr('y', d => d.y - 10);
+            });
+            
+            // Drag functions
+            function dragstarted(event, d) {
+                if (!event.active) simulation.alphaTarget(0.3).restart();
+                d.fx = d.x;
+                d.fy = d.y;
+            }
+            
+            function dragged(event, d) {
+                d.fx = event.x;
+                d.fy = event.y;
+            }
+            
+            function dragended(event, d) {
+                if (!event.active) simulation.alphaTarget(0);
+                d.fx = null;
+                d.fy = null;
+            }
+            
+            // Add click handler
+            node.on('click', (event, d) => {
+                showVectorDetails(d);
+            });
+        }
+        
+        // Create 3D visualization (simplified version)
+        function create3DVisualization() {
+            visualizationEl.innerHTML = '<p>3D visualization would be implemented with Three.js or similar library</p>';
+            
+            // In a real implementation, you would use Three.js to create a 3D visualization
+            // This is a placeholder for demonstration purposes
+            
+            const placeholderDiv = document.createElement('div');
+            placeholderDiv.style.padding = '20px';
+            placeholderDiv.style.backgroundColor = '#f8f9fa';
+            placeholderDiv.style.borderRadius = '5px';
+            placeholderDiv.style.height = '100%';
+            placeholderDiv.style.display = 'flex';
+            placeholderDiv.style.flexDirection = 'column';
+            placeholderDiv.style.justifyContent = 'center';
+            placeholderDiv.style.alignItems = 'center';
+            
+            placeholderDiv.innerHTML = `
+                <h4>3D Visualization (Placeholder)</h4>
+                <p>In a full implementation, this would be a 3D visualization using Three.js</p>
+                <p>Currently showing ${vectors.length} vectors with ${Object.values(contextMap).flat().length} relationships</p>
+            `;
+            
+            visualizationEl.appendChild(placeholderDiv);
+        }
+        
+        // Initialize
+        async function initialize() {
+            await fetchVectors();
+            await fetchContext();
+            updateVisualization();
+            updateVectorList();
+        }
+        
+        // Start the application
+        initialize();
+    </script>
+</body>
+</html>

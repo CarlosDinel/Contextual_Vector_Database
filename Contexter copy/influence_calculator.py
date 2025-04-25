@@ -1,191 +1,50 @@
-""" Influence Calculator Module for Contextual Vector Database
-
-This module implements the influence calculation component of the Contextual Vector Database (CVD),
-which is responsible for calculating influences between vectors based on their positions and metadata.
-
-Author: Carlos D. Almeida
-"""
-
+# Add imports at the top of influence_calculator.py
 import numpy as np
-from typing import Dict, List, Tuple, Optional, Any, Union, TYPE_CHECKING
-from scipy.spatial.distance import euclidean, cosine
-import logging
-import os
+from typing import Dict, List, Tuple, Any
 import sys
-import time
+import os
 
-# Add the parent directory to the Python path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-# Import related components
-try:
-    from .base_model import Vector
-    from .context_aggregator import ContextAggregator
-    if TYPE_CHECKING:
-        from .contexter_model import Contexter
-except ImportError:
-    from Contexter.base_model import Vector
-    from Contexter.context_aggregator import ContextAggregator
-    if TYPE_CHECKING:
-        from Contexter.contexter_model import Contexter
-
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+# Import your existing components
+from context_aggregator import ContextAggregator
+from Contexter.contexter_model import Contexter
 
 class InfluenceCalculator:
     """
-    Main class for calculating influences between vectors.
+    Calculates and manages influence between vectors in the Contextual Vector Database.
+    Includes the ReembeddingOrchestrator functionality for vector repositioning.
     """
+    
     def __init__(self, 
-                 contexter: Optional['Contexter'] = None,
-                 context_aggregator: Optional[ContextAggregator] = None,
-                 epsilon: float = 1e-8,
-                 impact_threshold: float = 0.1,
-                 impact_radius_factor: float = 1.0,
-                 solidness_factor: float = 0.1,
-                 energy_decay_rate: float = 0.95,
-                 hierarchical_depth: int = 2):
+                 batch_size=100, 
+                 max_iterations=10,
+                 solidness_factor=0.2, 
+                 energy_decay_rate=0.95,
+                 impact_radius_factor=0.3, 
+                 hierarchical_depth=2):
         """
-        Initialize the InfluenceCalculator.
+        Initialize the InfluenceCalculator with configuration parameters.
         
         Args:
-            contexter: Reference to the Contexter instance
-            context_aggregator: Aggregator for context information
-            epsilon: Small constant to prevent division by zero
-            impact_threshold: Minimum threshold for significant impact
+            batch_size: Number of vectors to process in each batch
+            max_iterations: Maximum number of reembedding iterations
+            solidness_factor: Factor controlling how quickly vectors become stable
+            energy_decay_rate: Rate at which movement energy decays over iterations
             impact_radius_factor: Factor for calculating impact radius
-            solidness_factor: Factor for updating vector solidness
-            energy_decay_rate: Rate at which energy decays with iterations
-            hierarchical_depth: Depth for hierarchical influence propagation
+            hierarchical_depth: Depth of hierarchical influence propagation
         """
-        self.contexter = contexter
-        self.context_aggregator = context_aggregator or ContextAggregator()
-        self.epsilon = epsilon
-        self.impact_threshold = impact_threshold
-        self.impact_radius_factor = impact_radius_factor
+        self.batch_size = batch_size
+        self.max_iterations = max_iterations
         self.solidness_factor = solidness_factor
         self.energy_decay_rate = energy_decay_rate
+        self.impact_radius_factor = impact_radius_factor
         self.hierarchical_depth = hierarchical_depth
-        self.vector_solidness = {}  # Dictionary to store vector solidness values
         
-    def calculate_influences(self, vectors: List[Vector]) -> Dict[str, Dict[str, float]]:
-        """
-        Calculate influences between vectors.
+        # Initialize related components
+        self.context_aggregator = ContextAggregator()
+        self.contexte_model = Contexter()
         
-        Args:
-            vectors: List of vectors to calculate influences for
-            
-        Returns:
-            Dictionary mapping vector IDs to dictionaries mapping other vector IDs to influence scores
-        """
-        influences = {}
-        
-        # First pass: calculate base influences
-        for vector_i in vectors:
-            vector_influences = {}
-            
-            for vector_j in vectors:
-                if vector_i.id != vector_j.id:
-                    # Calculate base impact
-                    base_impact = self.calculate_initial_impact(vector_i.data, vector_j.data)
-                    
-                    # Apply vector-specific factors
-                    impact = base_impact * self._calculate_vector_factors(vector_i, vector_j)
-                    
-                    # Apply metadata-based weights if available
-                    if hasattr(vector_i, 'metadata') and hasattr(vector_j, 'metadata'):
-                        impact = self.calculate_weighted_impact(
-                            impact,
-                            vector_i.id,
-                            vector_j.id,
-                            {vector_i.id: vector_i.metadata, vector_j.id: vector_j.metadata}
-                        )
-                    
-                    # Only store significant influences
-                    if impact > self.impact_threshold:
-                        vector_influences[vector_j.id] = impact
-            
-            influences[vector_i.id] = vector_influences
-        
-        # Second pass: propagate hierarchical influences
-        for vector_i in vectors:
-            if vector_i.id in influences:
-                propagated = self.propagate_hierarchical_influence(
-                    vector_i.id,
-                    {vid: v.data for v in vectors if v.id != vector_i.id},
-                    {v.id: v.data for v in vectors}
-                )
-                
-                # Update influences with propagated values
-                for other_id, propagated_impact in propagated.items():
-                    if other_id in influences[vector_i.id]:
-                        influences[vector_i.id][other_id] = max(
-                            influences[vector_i.id][other_id],
-                            propagated_impact
-                        )
-                    else:
-                        influences[vector_i.id][other_id] = propagated_impact
-        
-        return influences
-    
-    def calculate_impact(self, vector_i: Vector, vector_j: Vector) -> float:
-        """
-        Calculate the impact between two vectors.
-        
-        Impact(Vi, Vj) = Similarity(Vi, Vj) / (Distance(Vi, Vj) + ε)
-        
-        Args:
-            vector_i: Source vector
-            vector_j: Target vector
-            
-        Returns:
-            Impact score
-        """
-        # Calculate similarity (1 - cosine distance)
-        similarity = 1.0 - cosine(vector_i.data, vector_j.data)
-        
-        # Calculate distance
-        distance = euclidean(vector_i.data, vector_j.data)
-        
-        # Calculate impact
-        impact = similarity / (distance + self.epsilon)
-        
-        # Apply vector-specific factors
-        impact *= self._calculate_vector_factors(vector_i, vector_j)
-        
-        return impact
-    
-    def _calculate_vector_factors(self, vector_i: Vector, vector_j: Vector) -> float:
-        """
-        Calculate vector-specific factors that affect impact.
-        
-        Args:
-            vector_i: Source vector
-            vector_j: Target vector
-            
-        Returns:
-            Factor to multiply impact by
-        """
-        # Consider solidness (more solid vectors have less impact)
-        solidness_factor = 1.0 - 0.5 * (vector_i.solidness + vector_j.solidness)
-        
-        # Consider impact radius with decay
-        distance = euclidean(vector_i.data, vector_j.data)
-        radius_factor = min(1.0, vector_i.impact_radius / (distance + self.epsilon))
-        
-        # Apply energy decay based on distance
-        decay_factor = self.energy_decay_rate ** distance
-        
-        # Consider metadata-based relationships
-        relationship_factor = 1.0
-        if hasattr(vector_i, 'metadata') and hasattr(vector_j, 'metadata'):
-            # Check for matching categories or sources
-            if (vector_i.metadata.get('category') == vector_j.metadata.get('category') or
-                vector_i.metadata.get('source') == vector_j.metadata.get('source')):
-                relationship_factor = 1.2  # Boost influence for related vectors
-        
-        return solidness_factor * radius_factor * decay_factor * relationship_factor
+        # Track vector solidness (stability over time)
+        self.vector_solidness = {}
     
     def calculate_impact_radius(self, vector_id: str, vector: np.ndarray, 
                                neighbors: Dict[str, np.ndarray]) -> float:
@@ -383,11 +242,11 @@ class InfluenceCalculator:
                     update_vector += direction * weighted_impact * influence
             
             # Apply adaptive convergence
-            learning_rate = self.contexter.calculate_adaptive_learning_rate(
+            learning_rate = self.contexte_model.calculate_adaptive_learning_rate(
                 vector_id, movement_history.get(vector_id, []))
             
             # Apply negative feedback
-            feedback = self.contexter.calculate_negative_feedback(
+            feedback = self.contexte_model.calculate_negative_feedback(
                 vector_id, metadata.get(vector_id, {}))
             
             # Apply energy decay based on iteration
@@ -483,48 +342,6 @@ class InfluenceCalculator:
         metrics['final_solidness'] = self.vector_solidness
         return metrics
 
-    def calculate_influence(self, vector_i: Vector, vector_j: Vector, context: Dict[str, Any]) -> float:
-        """
-        Calculate influence between two vectors considering context.
-        
-        Args:
-            vector_i: Source vector
-            vector_j: Target vector
-            context: Context information for the source vector
-            
-        Returns:
-            float: Influence score
-        """
-        # Calculate base impact
-        base_impact = self.calculate_impact(vector_i, vector_j)
-        
-        # Apply context-based weighting
-        context_weight = 1.0
-        
-        # Consider temporal context
-        if 'timestamp' in context:
-            current_time = time.time()
-            time_diff = abs(current_time - float(context['timestamp']))
-            context_weight *= 1.0 / (1.0 + 0.1 * time_diff)
-        
-        # Consider semantic context
-        if 'keywords' in context:
-            # If vectors share keywords, increase influence
-            if vector_j.metadata and 'keywords' in vector_j.metadata:
-                shared_keywords = set(context['keywords']) & set(vector_j.metadata['keywords'])
-                if shared_keywords:
-                    context_weight *= (1.0 + 0.2 * len(shared_keywords))
-        
-        # Consider structural context
-        if 'connections' in context:
-            # If vectors are connected, increase influence
-            if vector_j.id in context['connections']:
-                context_weight *= 1.5
-        
-        # Apply context weight to base impact
-        influence = base_impact * context_weight
-        
-        # Ensure influence is non-negative and capped at 1.0
-        return max(0.0, min(1.0, influence))
+
 
 # example usage 

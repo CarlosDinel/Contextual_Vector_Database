@@ -1,57 +1,101 @@
+""" Time Stamp Embedding Module for Contextual Vector Database
+
+This module implements the timestamp embedding component that converts
+temporal data into vector representations.
+
+Author: Carlos D. Almeida
+"""
+
 import numpy as np
+from typing import Union
+import logging
 from datetime import datetime
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 class TimeStampEmbedding:
     """
-    Time stamp embedding class for converting time stamps into vectors.
-    These vectors are crucial for transactional vectors and contain
-    information about transactions made by a dataobject.
+    Handles embedding of timestamp data into vector representations.
     """
-    def __init__(self, vector_size=10):
+    def __init__(self, vector_size: int = 32):
         """
-        Initialize the TimeStampEmbedding class.
-
+        Initialize the timestamp embedder.
+        
         Args:
-            vector_size (int): Size of the resulting vector. Default is 10.
+            vector_size: Size of the output vector
         """
         self.vector_size = vector_size
-
-    def encode(self, time_stamp):
+        
+    def embed(self, timestamp: Union[str, datetime]) -> np.ndarray:
         """
-        Convert a time stamp into a vector.
-
+        Embed a timestamp into a vector representation that preserves temporal proximity.
+        
         Args:
-            time_stamp (str or datetime): The time stamp to be converted into a vector.
-
+            timestamp: ISO format string or datetime object
+            
         Returns:
-            numpy.ndarray: The resulting vector representation of the time stamp.
+            np.ndarray: Vector representation of the timestamp
         """
-        if isinstance(time_stamp, str):
-            time_stamp = datetime.fromisoformat(time_stamp)
-        
-        # Extract various time components
-        year = time_stamp.year
-        month = time_stamp.month
-        day = time_stamp.day
-        hour = time_stamp.hour
-        minute = time_stamp.minute
-        second = time_stamp.second
-        
-        # Create a vector representation
-        time_stamp_vector = np.array([
-            year / 3000,  # Normalize year
-            month / 12,   # Normalize month
-            day / 31,     # Normalize day
-            hour / 24,    # Normalize hour
-            minute / 60,  # Normalize minute
-            second / 60,  # Normalize second
-            np.sin(2 * np.pi * month / 12),  # Cyclical representation of month
-            np.cos(2 * np.pi * month / 12),
-            np.sin(2 * np.pi * day / 31),    # Cyclical representation of day
-            np.cos(2 * np.pi * day / 31)
-        ])
-        
-        return time_stamp_vector
+        try:
+            # Convert string to datetime if needed
+            if isinstance(timestamp, str):
+                timestamp = datetime.fromisoformat(timestamp)
+                
+            # Extract temporal features with better normalization
+            # Use cyclical encoding for periodic features
+            year = timestamp.year / 10000.0  # Normalize year
+            
+            # Cyclical encoding for periodic features
+            month_sin = np.sin(2 * np.pi * timestamp.month / 12.0)
+            month_cos = np.cos(2 * np.pi * timestamp.month / 12.0)
+            
+            day_sin = np.sin(2 * np.pi * timestamp.day / 31.0)
+            day_cos = np.cos(2 * np.pi * timestamp.day / 31.0)
+            
+            hour_sin = np.sin(2 * np.pi * timestamp.hour / 24.0)
+            hour_cos = np.cos(2 * np.pi * timestamp.hour / 24.0)
+            
+            minute_sin = np.sin(2 * np.pi * timestamp.minute / 60.0)
+            minute_cos = np.cos(2 * np.pi * timestamp.minute / 60.0)
+            
+            second_sin = np.sin(2 * np.pi * timestamp.second / 60.0)
+            second_cos = np.cos(2 * np.pi * timestamp.second / 60.0)
+            
+            # Cyclical encoding for weekday
+            weekday_sin = np.sin(2 * np.pi * timestamp.weekday() / 7.0)
+            weekday_cos = np.cos(2 * np.pi * timestamp.weekday() / 7.0)
+            
+            # Create base vector with cyclical features
+            base_vector = np.array([
+                year,
+                month_sin, month_cos,
+                day_sin, day_cos,
+                hour_sin, hour_cos,
+                minute_sin, minute_cos,
+                second_sin, second_cos,
+                weekday_sin, weekday_cos
+            ])
+            
+            # Pad or truncate to desired size
+            if len(base_vector) < self.vector_size:
+                # Pad with zeros
+                vector = np.pad(base_vector, (0, self.vector_size - len(base_vector)))
+            else:
+                # Truncate
+                vector = base_vector[:self.vector_size]
+                
+            # Normalize
+            norm = np.linalg.norm(vector)
+            if norm > 0:
+                vector = vector / norm
+                
+            return vector
+            
+        except Exception as e:
+            logger.error(f"Failed to embed timestamp: {e}")
+            raise
 
     def decode(self, vector):
         """
@@ -97,12 +141,16 @@ class TimeStampEmbedding:
         return features
 
 # Example usage
-# ts_embedder = TimeStampEmbedding()
-# timestamp = "2023-06-15 14:30:00"
-# encoded = ts_embedder.encode(timestamp)
-# decoded = ts_embedder.decode(encoded)
-
-# print(f"Original: {timestamp}")
-# print(f"Encoded: {encoded}")
-# print(f"Decoded: {decoded}")
+if __name__ == "__main__":
+    # Create timestamp embedder
+    embedder = TimeStampEmbedding()
+    
+    # Example timestamp
+    timestamp = datetime.now().isoformat()
+    
+    # Embed the timestamp
+    vector = embedder.embed(timestamp)
+    
+    print(f"Timestamp vector shape: {vector.shape}")
+    print(f"Timestamp vector: {vector[:5]}")  # Print first 5 components
 
