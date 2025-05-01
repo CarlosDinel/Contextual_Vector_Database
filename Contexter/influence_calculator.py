@@ -252,4 +252,3 @@ class InfluenceCalculator:
         """Clear the metrics cache."""
         self.metrics_cache.clear()
 
-# example usage 
