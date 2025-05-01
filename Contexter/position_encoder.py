@@ -1,186 +1,223 @@
+""" Position Encoder Module
+
+This module implements the position encoding and recalculation logic for the Contexter.
+It handles the semantic positioning of vectors in the contextual space, ensuring
+that vectors maintain meaningful relationships based on their content and context.
+
+Author: Carlos D. Almeida
+"""
+
 import numpy as np
+from typing import Dict, List, Tuple, Optional
 import logging
-from typing import Dict
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
+@dataclass
+class PositionInfo:
+    """Container for position-related information."""
+    position: np.ndarray
+    semantic_distance: float
+    temporal_distance: float
+    structural_distance: float
+
 class PositionEncoder:
-    """
-    Encodes and decodes vector positions in the contextual space.
-    """
-    def __init__(self, 
-                 dimensions: int = 3, 
-                 encoding_method: str = 'direct',
-                 learning_rate: float = 0.1):
-        """
-        Initialize the position encoder.
-        
-        Args:
-            dimensions: Number of dimensions in the vector space
-            encoding_method: Method to encode positions ('direct', 'normalized', 'spherical')
-            learning_rate: Learning rate for position updates
-        """
-        self.dimensions = dimensions
-        self.encoding_method = encoding_method
-        self.learning_rate = learning_rate
-        
-    def encode_position(self, vector_data: np.ndarray) -> np.ndarray:
-        """
-        Encode vector data into a position representation.
-        
-        Args:
-            vector_data: Raw vector data
-            
-        Returns:
-            Encoded position
-        """
-        if self.encoding_method == 'direct':
-            return self._direct_encoding(vector_data)
-        elif self.encoding_method == 'normalized':
-            return self._normalized_encoding(vector_data)
-        elif self.encoding_method == 'spherical':
-            return self._spherical_encoding(vector_data)
-        else:
-            logger.warning(f"Unknown encoding method: {self.encoding_method}, using direct encoding")
-            return self._direct_encoding(vector_data)
+    """Handles position encoding and recalculation for vectors."""
     
-    def decode_position(self, encoded_position: np.ndarray) -> np.ndarray:
-        """
-        Decode position representation back to vector data.
+    def __init__(
+        self,
+        position_dim: int = 512,
+        max_sequence_length: int = 1000,
+        temperature: float = 10000.0,
+        semantic_weight: float = 0.6,
+        temporal_weight: float = 0.2,
+        structural_weight: float = 0.2
+    ):
+        """Initialize the position encoder.
         
         Args:
-            encoded_position: Encoded position
-            
+            position_dim: Dimension of position encodings
+            max_sequence_length: Maximum sequence length to handle
+            temperature: Temperature parameter for position encoding
+            semantic_weight: Weight for semantic distance
+            temporal_weight: Weight for temporal distance
+            structural_weight: Weight for structural distance
+        """
+        self.position_dim = position_dim
+        self.max_sequence_length = max_sequence_length
+        self.temperature = temperature
+        self.semantic_weight = semantic_weight
+        self.temporal_weight = temporal_weight
+        self.structural_weight = structural_weight
+        
+        # Initialize position encodings
+        self.position_encodings = self._create_position_encodings()
+        
+    def _create_position_encodings(self) -> np.ndarray:
+        """Create sinusoidal position encodings.
+        
         Returns:
-            Decoded vector data
+            Position encodings matrix
         """
-        if self.encoding_method == 'direct':
-            return self._direct_decoding(encoded_position)
-        elif self.encoding_method == 'normalized':
-            return self._normalized_decoding(encoded_position)
-        elif self.encoding_method == 'spherical':
-            return self._spherical_decoding(encoded_position)
-        else:
-            logger.warning(f"Unknown encoding method: {self.encoding_method}, using direct decoding")
-            return self._direct_decoding(encoded_position)
-    
-    def update_position(self, 
-                       current_position: np.ndarray, 
-                       influences: Dict[str, float],
-                       all_positions: Dict[str, np.ndarray]) -> np.ndarray:
-        """
-        Update vector position based on influences.
+        position = np.arange(self.max_sequence_length)[:, np.newaxis]
+        div_term = np.exp(np.arange(0, self.position_dim, 2) * 
+                         -(np.log(self.temperature) / self.position_dim))
+        
+        pe = np.zeros((self.max_sequence_length, self.position_dim))
+        pe[:, 0::2] = np.sin(position * div_term)
+        pe[:, 1::2] = np.cos(position * div_term)
+        
+        return pe
+        
+    def encode_position(
+        self,
+        vector: np.ndarray,
+        position: int,
+        metadata: Dict[str, Any]
+    ) -> np.ndarray:
+        """Encode position information into a vector.
         
         Args:
-            current_position: Current encoded position
-            influences: Dictionary mapping vector IDs to influence scores
-            all_positions: Dictionary mapping vector IDs to their encoded positions
+            vector: Original vector
+            position: Position in sequence
+            metadata: Vector metadata
             
         Returns:
-            Updated encoded position
+            Position-encoded vector
         """
-        # Calculate weighted average direction
-        update_vector = np.zeros_like(current_position)
+        if position >= self.max_sequence_length:
+            position = position % self.max_sequence_length
+            
+        # Get position encoding
+        pos_encoding = self.position_encodings[position]
+        
+        # Combine with original vector
+        encoded = vector + pos_encoding
+        
+        # Normalize
+        encoded = encoded / np.linalg.norm(encoded)
+        
+        return encoded
+        
+    def recalculate_position(
+        self,
+        vector: np.ndarray,
+        context_vectors: List[Tuple[str, np.ndarray, Dict[str, Any]]],
+        current_position: int
+    ) -> PositionInfo:
+        """Recalculate vector position based on semantic relationships.
+        
+        Args:
+            vector: Vector to recalculate position for
+            context_vectors: List of (vector_id, vector, metadata) tuples
+            current_position: Current position in sequence
+            
+        Returns:
+            PositionInfo containing new position and distances
+        """
+        if not context_vectors:
+            return PositionInfo(
+                position=vector,
+                semantic_distance=0.0,
+                temporal_distance=0.0,
+                structural_distance=0.0
+            )
+            
+        # Calculate semantic distances
+        semantic_distances = []
+        for _, context_vec, _ in context_vectors:
+            distance = 1 - np.dot(vector, context_vec) / (
+                np.linalg.norm(vector) * np.linalg.norm(context_vec)
+            )
+            semantic_distances.append(distance)
+            
+        # Calculate temporal distances
+        temporal_distances = []
+        for _, _, metadata in context_vectors:
+            if 'timestamp' in metadata:
+                time_diff = abs(current_position - metadata['timestamp'])
+                temporal_distances.append(time_diff)
+            else:
+                temporal_distances.append(0.0)
+                
+        # Calculate structural distances
+        structural_distances = []
+        for _, _, metadata in context_vectors:
+            if 'connections' in metadata:
+                distance = len(metadata['connections'])
+                structural_distances.append(distance)
+            else:
+                structural_distances.append(0.0)
+                
+        # Normalize distances
+        semantic_distances = np.array(semantic_distances)
+        temporal_distances = np.array(temporal_distances)
+        structural_distances = np.array(structural_distances)
+        
+        if len(semantic_distances) > 0:
+            semantic_distances = semantic_distances / np.max(semantic_distances)
+        if len(temporal_distances) > 0:
+            temporal_distances = temporal_distances / np.max(temporal_distances)
+        if len(structural_distances) > 0:
+            structural_distances = structural_distances / np.max(structural_distances)
+            
+        # Calculate weighted average position
+        new_position = np.zeros_like(vector)
         total_weight = 0.0
         
-        for vec_id, influence in influences.items():
-            if vec_id in all_positions:
-                other_position = all_positions[vec_id]
-                
-                # Calculate direction and weight
-                direction = other_position - current_position
-                weight = influence
-                
-                # Add to update vector
-                update_vector += direction * weight
-                total_weight += weight
-        
-        # Normalize and apply learning rate
+        for i, (_, context_vec, _) in enumerate(context_vectors):
+            # Calculate combined weight
+            weight = (
+                self.semantic_weight * (1 - semantic_distances[i]) +
+                self.temporal_weight * (1 - temporal_distances[i]) +
+                self.structural_weight * (1 - structural_distances[i])
+            )
+            
+            new_position += weight * context_vec
+            total_weight += weight
+            
         if total_weight > 0:
-            update_vector = update_vector / total_weight
-            update_vector = update_vector * self.learning_rate
+            new_position /= total_weight
             
-            # Apply update
-            new_position = current_position + update_vector
-            
-            # Ensure position stays within bounds
-            new_position = self._clip_position(new_position)
-            
-            return new_position
+        # Normalize new position
+        new_position = new_position / np.linalg.norm(new_position)
         
-        return current_position
-    
-    def _clip_position(self, position: np.ndarray) -> np.ndarray:
-        """
-        Clip position to ensure it stays within reasonable bounds.
+        return PositionInfo(
+            position=new_position,
+            semantic_distance=np.mean(semantic_distances),
+            temporal_distance=np.mean(temporal_distances),
+            structural_distance=np.mean(structural_distances)
+        )
+        
+    def update_position(
+        self,
+        vector: np.ndarray,
+        position_info: PositionInfo,
+        learning_rate: float = 0.1
+    ) -> np.ndarray:
+        """Update vector position based on position info.
         
         Args:
-            position: Position to clip
+            vector: Current vector
+            position_info: Position information
+            learning_rate: Learning rate for update
             
         Returns:
-            Clipped position
+            Updated vector
         """
-        # This is a simple implementation - adjust bounds as needed
-        return np.clip(position, -10.0, 10.0)
-    
-    def _direct_encoding(self, vector_data: np.ndarray) -> np.ndarray:
-        """Direct encoding - no transformation"""
-        return np.array(vector_data)
-    
-    def _direct_decoding(self, encoded_position: np.ndarray) -> np.ndarray:
-        """Direct decoding - no transformation"""
-        return np.array(encoded_position)
-    
-    def _normalized_encoding(self, vector_data: np.ndarray) -> np.ndarray:
-        """Normalize vector to unit length"""
-        vector = np.array(vector_data)
-        norm = np.linalg.norm(vector)
-        if norm > 0:
-            return vector / norm
-        return vector
-    
-    def _normalized_decoding(self, encoded_position: np.ndarray) -> np.ndarray:
-        """No special decoding needed for normalized vectors"""
-        return np.array(encoded_position)
-    
-    def _spherical_encoding(self, vector_data: np.ndarray) -> np.ndarray:
-        """Convert to spherical coordinates"""
-        vector = np.array(vector_data)
+        # Calculate position update
+        position_update = position_info.position - vector
         
-        # Only implemented for 2D and 3D vectors
-        if len(vector) == 2:
-            r = np.linalg.norm(vector)
-            theta = np.arctan2(vector[1], vector[0])
-            return np.array([r, theta])
-        elif len(vector) == 3:
-            r = np.linalg.norm(vector)
-            if r == 0:
-                return np.array([0, 0, 0])
-            theta = np.arccos(vector[2] / r)
-            phi = np.arctan2(vector[1], vector[0])
-            return np.array([r, theta, phi])
-        else:
-            # Fall back to direct encoding for higher dimensions
-            logger.warning(f"Spherical encoding not implemented for {len(vector)} dimensions, using direct encoding")
-            return vector
-    
-    def _spherical_decoding(self, encoded_position: np.ndarray) -> np.ndarray:
-        """Convert from spherical coordinates back to Cartesian"""
-        encoded = np.array(encoded_position)
+        # Apply learning rate
+        position_update *= learning_rate
         
-        # Only implemented for 2D and 3D vectors
-        if len(encoded) == 2:
-            r, theta = encoded
-            x = r * np.cos(theta)
-            y = r * np.sin(theta)
-            return np.array([x, y])
-        elif len(encoded) == 3:
-            r, theta, phi = encoded
-            x = r * np.sin(theta) * np.cos(phi)
-            y = r * np.sin(theta) * np.sin(phi)
-            z = r * np.cos(theta)
-            return np.array([x, y, z])
-        else:
-            # Fall back to direct decoding for higher dimensions
-            logger.warning(f"Spherical decoding not implemented for {len(encoded)} dimensions, using direct decoding")
-            return encoded
+        # Update vector
+        updated_vector = vector + position_update
+        
+        # Normalize
+        updated_vector = updated_vector / np.linalg.norm(updated_vector)
+        
+        return updated_vector
+
+print(f"vector_data shape: {vector_data.shape}")

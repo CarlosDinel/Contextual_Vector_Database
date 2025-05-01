@@ -1,530 +1,255 @@
-""" Influence Calculator Module for Contextual Vector Database
+""" Influence Calculator Module
 
-This module implements the influence calculation component of the Contextual Vector Database (CVD),
-which is responsible for calculating influences between vectors based on their positions and metadata.
+This module implements the core influence metrics for the Contexter,
+including vector solidness, impact force, impact radius, and impact direction.
+These metrics are essential for understanding and quantifying the relationships
+between vectors in the contextual space.
 
 Author: Carlos D. Almeida
 """
 
 import numpy as np
-from typing import Dict, List, Tuple, Optional, Any, Union, TYPE_CHECKING
-from scipy.spatial.distance import euclidean, cosine
+from typing import Dict, Any, List, Tuple
 import logging
-import os
-import sys
-import time
+from dataclasses import dataclass
+from scipy.spatial.distance import cosine
 
-# Add the parent directory to the Python path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-# Import related components
-try:
-    from .base_model import Vector
-    from .context_aggregator import ContextAggregator
-    if TYPE_CHECKING:
-        from .contexter_model import Contexter
-except ImportError:
-    from Contexter.base_model import Vector
-    from Contexter.context_aggregator import ContextAggregator
-    if TYPE_CHECKING:
-        from Contexter.contexter_model import Contexter
-
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+@dataclass
+class VectorMetrics:
+    """Container for vector influence metrics."""
+    solidness: float
+    impact_force: float
+    impact_radius: float
+    impact_direction: np.ndarray
+
 class InfluenceCalculator:
-    """
-    Main class for calculating influences between vectors.
-    """
-    def __init__(self, 
-                 contexter: Optional['Contexter'] = None,
-                 context_aggregator: Optional[ContextAggregator] = None,
-                 epsilon: float = 1e-8,
-                 impact_threshold: float = 0.1,
-                 impact_radius_factor: float = 1.0,
-                 solidness_factor: float = 0.1,
-                 energy_decay_rate: float = 0.95,
-                 hierarchical_depth: int = 2):
-        """
-        Initialize the InfluenceCalculator.
+    """Calculates and manages influence metrics between vectors."""
+    
+    def __init__(
+        self,
+        solidness_decay: float = 0.95,
+        impact_force_threshold: float = 0.1,
+        min_impact_radius: float = 0.01
+    ):
+        """Initialize the influence calculator.
         
         Args:
-            contexter: Reference to the Contexter instance
-            context_aggregator: Aggregator for context information
-            epsilon: Small constant to prevent division by zero
-            impact_threshold: Minimum threshold for significant impact
-            impact_radius_factor: Factor for calculating impact radius
-            solidness_factor: Factor for updating vector solidness
-            energy_decay_rate: Rate at which energy decays with iterations
-            hierarchical_depth: Depth for hierarchical influence propagation
+            solidness_decay: Rate at which solidness decays over time
+            impact_force_threshold: Minimum force required for influence
+            min_impact_radius: Minimum radius for vector impact
         """
-        self.contexter = contexter
-        self.context_aggregator = context_aggregator or ContextAggregator()
-        self.epsilon = epsilon
-        self.impact_threshold = impact_threshold
-        self.impact_radius_factor = impact_radius_factor
-        self.solidness_factor = solidness_factor
-        self.energy_decay_rate = energy_decay_rate
-        self.hierarchical_depth = hierarchical_depth
-        self.vector_solidness = {}  # Dictionary to store vector solidness values
+        self.solidness_decay = solidness_decay
+        self.impact_force_threshold = impact_force_threshold
+        self.min_impact_radius = min_impact_radius
+        self.metrics_cache: Dict[str, VectorMetrics] = {}
         
-    def calculate_influences(self, vectors: List[Vector]) -> Dict[str, Dict[str, float]]:
-        """
-        Calculate influences between vectors.
+    def calculate_metrics(
+        self,
+        vector: np.ndarray,
+        metadata: Dict[str, Any],
+        context_vectors: List[Tuple[str, np.ndarray]]
+    ) -> VectorMetrics:
+        """Calculate all influence metrics for a vector.
         
         Args:
-            vectors: List of vectors to calculate influences for
+            vector: The vector to calculate metrics for
+            metadata: Vector metadata
+            context_vectors: List of (vector_id, vector) tuples in context
             
         Returns:
-            Dictionary mapping vector IDs to dictionaries mapping other vector IDs to influence scores
+            VectorMetrics object containing all calculated metrics
         """
-        influences = {}
+        # Calculate solidness based on vector stability and metadata
+        solidness = self._calculate_solidness(vector, metadata)
         
-        # First pass: calculate base influences
-        for vector_i in vectors:
-            vector_influences = {}
-            
-            for vector_j in vectors:
-                if vector_i.id != vector_j.id:
-                    # Calculate base impact
-                    base_impact = self.calculate_initial_impact(vector_i.data, vector_j.data)
-                    
-                    # Apply vector-specific factors
-                    impact = base_impact * self._calculate_vector_factors(vector_i, vector_j)
-                    
-                    # Apply metadata-based weights if available
-                    if hasattr(vector_i, 'metadata') and hasattr(vector_j, 'metadata'):
-                        impact = self.calculate_weighted_impact(
-                            impact,
-                            vector_i.id,
-                            vector_j.id,
-                            {vector_i.id: vector_i.metadata, vector_j.id: vector_j.metadata}
-                        )
-                    
-                    # Only store significant influences
-                    if impact > self.impact_threshold:
-                        vector_influences[vector_j.id] = impact
-            
-            influences[vector_i.id] = vector_influences
+        # Calculate impact force based on vector magnitude and context
+        impact_force = self._calculate_impact_force(vector, context_vectors)
         
-        # Second pass: propagate hierarchical influences
-        for vector_i in vectors:
-            if vector_i.id in influences:
-                propagated = self.propagate_hierarchical_influence(
-                    vector_i.id,
-                    {vid: v.data for v in vectors if v.id != vector_i.id},
-                    {v.id: v.data for v in vectors}
-                )
-                
-                # Update influences with propagated values
-                for other_id, propagated_impact in propagated.items():
-                    if other_id in influences[vector_i.id]:
-                        influences[vector_i.id][other_id] = max(
-                            influences[vector_i.id][other_id],
-                            propagated_impact
-                        )
-                    else:
-                        influences[vector_i.id][other_id] = propagated_impact
+        # Calculate impact radius based on vector distribution
+        impact_radius = self._calculate_impact_radius(vector, context_vectors)
         
-        return influences
-    
-    def calculate_impact(self, vector_i: Vector, vector_j: Vector) -> float:
-        """
-        Calculate the impact between two vectors.
+        # Calculate impact direction based on vector relationships
+        impact_direction = self._calculate_impact_direction(vector, context_vectors)
         
-        Impact(Vi, Vj) = Similarity(Vi, Vj) / (Distance(Vi, Vj) + ε)
+        return VectorMetrics(
+            solidness=solidness,
+            impact_force=impact_force,
+            impact_radius=impact_radius,
+            impact_direction=impact_direction
+        )
+        
+    def _calculate_solidness(
+        self,
+        vector: np.ndarray,
+        metadata: Dict[str, Any]
+    ) -> float:
+        """Calculate vector solidness based on stability and metadata.
         
         Args:
-            vector_i: Source vector
-            vector_j: Target vector
+            vector: The vector to calculate solidness for
+            metadata: Vector metadata
             
         Returns:
-            Impact score
+            Solidness value between 0 and 1
         """
-        # Calculate similarity (1 - cosine distance)
-        similarity = 1.0 - cosine(vector_i.data, vector_j.data)
+        # Base solidness on vector magnitude
+        magnitude = np.linalg.norm(vector)
+        base_solidness = np.tanh(magnitude)  # Normalize to [0,1]
         
-        # Calculate distance
-        distance = euclidean(vector_i.data, vector_j.data)
+        # Adjust based on metadata
+        metadata_factor = 1.0
+        if 'stability' in metadata:
+            metadata_factor = metadata['stability']
+        elif 'age' in metadata:
+            # Older vectors are more solid
+            age = metadata['age']
+            metadata_factor = 1.0 - np.exp(-age)
+            
+        # Apply decay
+        solidness = base_solidness * metadata_factor * self.solidness_decay
         
-        # Calculate impact
-        impact = similarity / (distance + self.epsilon)
+        return np.clip(solidness, 0, 1)
         
-        # Apply vector-specific factors
-        impact *= self._calculate_vector_factors(vector_i, vector_j)
-        
-        return impact
-    
-    def _calculate_vector_factors(self, vector_i: Vector, vector_j: Vector) -> float:
-        """
-        Calculate vector-specific factors that affect impact.
+    def _calculate_impact_force(
+        self,
+        vector: np.ndarray,
+        context_vectors: List[Tuple[str, np.ndarray]]
+    ) -> float:
+        """Calculate impact force based on vector magnitude and context.
         
         Args:
-            vector_i: Source vector
-            vector_j: Target vector
+            vector: The vector to calculate impact force for
+            context_vectors: List of (vector_id, vector) tuples in context
             
         Returns:
-            Factor to multiply impact by
+            Impact force value between 0 and 1
         """
-        # Consider solidness (more solid vectors have less impact)
-        solidness_factor = 1.0 - 0.5 * (vector_i.solidness + vector_j.solidness)
+        if not context_vectors:
+            return 0.0
+            
+        # Calculate average similarity to context vectors
+        similarities = []
+        for _, context_vec in context_vectors:
+            similarity = 1 - cosine(vector, context_vec)
+            similarities.append(similarity)
+            
+        avg_similarity = np.mean(similarities)
         
-        # Consider impact radius with decay
-        distance = euclidean(vector_i.data, vector_j.data)
-        radius_factor = min(1.0, vector_i.impact_radius / (distance + self.epsilon))
+        # Impact force is based on both magnitude and context similarity
+        magnitude = np.linalg.norm(vector)
+        impact_force = magnitude * avg_similarity
         
-        # Apply energy decay based on distance
-        decay_factor = self.energy_decay_rate ** distance
+        # Apply threshold
+        if impact_force < self.impact_force_threshold:
+            return 0.0
+            
+        return np.clip(impact_force, 0, 1)
         
-        # Consider metadata-based relationships
-        relationship_factor = 1.0
-        if hasattr(vector_i, 'metadata') and hasattr(vector_j, 'metadata'):
-            # Check for matching categories or sources
-            if (vector_i.metadata.get('category') == vector_j.metadata.get('category') or
-                vector_i.metadata.get('source') == vector_j.metadata.get('source')):
-                relationship_factor = 1.2  # Boost influence for related vectors
+    def _calculate_impact_radius(
+        self,
+        vector: np.ndarray,
+        context_vectors: List[Tuple[str, np.ndarray]]
+    ) -> float:
+        """Calculate impact radius based on vector distribution.
         
-        return solidness_factor * radius_factor * decay_factor * relationship_factor
-    
-    def calculate_impact_radius(self, vector_id: str, vector: np.ndarray, 
-                               neighbors: Dict[str, np.ndarray]) -> float:
+        Args:
+            vector: The vector to calculate impact radius for
+            context_vectors: List of (vector_id, vector) tuples in context
+            
+        Returns:
+            Impact radius value between min_impact_radius and 1
         """
-        Dynamically calculate impact radius based on local density.
+        if not context_vectors:
+            return self.min_impact_radius
+            
+        # Calculate distances to context vectors
+        distances = []
+        for _, context_vec in context_vectors:
+            distance = np.linalg.norm(vector - context_vec)
+            distances.append(distance)
+            
+        # Impact radius is inversely proportional to average distance
+        avg_distance = np.mean(distances)
+        impact_radius = 1.0 / (1.0 + avg_distance)
+        
+        return np.clip(impact_radius, self.min_impact_radius, 1.0)
+        
+    def _calculate_impact_direction(
+        self,
+        vector: np.ndarray,
+        context_vectors: List[Tuple[str, np.ndarray]]
+    ) -> np.ndarray:
+        """Calculate impact direction based on vector relationships.
+        
+        Args:
+            vector: The vector to calculate impact direction for
+            context_vectors: List of (vector_id, vector) tuples in context
+            
+        Returns:
+            Normalized impact direction vector
+        """
+        if not context_vectors:
+            return np.zeros_like(vector)
+            
+        # Calculate weighted sum of direction vectors
+        direction = np.zeros_like(vector)
+        total_weight = 0.0
+        
+        for _, context_vec in context_vectors:
+            # Direction is the difference vector
+            diff = context_vec - vector
+            # Weight by similarity
+            weight = 1 - cosine(vector, context_vec)
+            direction += weight * diff
+            total_weight += weight
+            
+        if total_weight > 0:
+            direction /= total_weight
+            
+        # Normalize the direction vector
+        norm = np.linalg.norm(direction)
+        if norm > 0:
+            direction /= norm
+            
+        return direction
+        
+    def update_metrics(
+        self,
+        vector_id: str,
+        vector: np.ndarray,
+        metadata: Dict[str, Any],
+        context_vectors: List[Tuple[str, np.ndarray]]
+    ) -> VectorMetrics:
+        """Update and cache metrics for a vector.
         
         Args:
             vector_id: ID of the vector
-            vector: The vector's embedding
-            neighbors: Dictionary of neighbor IDs to their embeddings
+            vector: The vector to update metrics for
+            metadata: Vector metadata
+            context_vectors: List of (vector_id, vector) tuples in context
             
         Returns:
-            float: The calculated impact radius
+            Updated VectorMetrics
         """
-        if not neighbors:
-            return self.impact_radius_factor
-            
-        # Calculate average distance to neighbors
-        distances = []
-        for neighbor_id, neighbor in neighbors.items():
-            distance = np.linalg.norm(vector - neighbor)
-            distances.append(distance)
-            
-        avg_distance = np.mean(distances) if distances else self.impact_radius_factor
-        # Adjust radius based on local density
-        return avg_distance * self.impact_radius_factor
-    
-    def calculate_initial_impact(self, vector1: np.ndarray, vector2: np.ndarray) -> float:
-        """
-        Calculate base impact between two vectors.
-        
-        Args:
-            vector1: First vector embedding
-            vector2: Second vector embedding
-            
-        Returns:
-            float: Initial impact value
-        """
-        # Distance-based impact
-        distance = np.linalg.norm(vector1 - vector2)
-        distance_impact = 1.0 / (1.0 + distance)
-        
-        # Semantic similarity impact (cosine similarity)
-        dot_product = np.dot(vector1, vector2)
-        norm_product = np.linalg.norm(vector1) * np.linalg.norm(vector2)
-        similarity = dot_product / (norm_product + 1e-10)  # Avoid division by zero
-        
-        # Combine distance and semantic impacts
-        return 0.5 * distance_impact + 0.5 * max(0, similarity)
-    
-    def calculate_weighted_impact(self, base_impact: float, 
-                                 vector1_id: str, vector2_id: str,
-                                 metadata: Dict[str, Dict[str, Any]]) -> float:
-        """
-        Apply weights to the base impact.
-        
-        Args:
-            base_impact: Initial calculated impact
-            vector1_id: ID of first vector
-            vector2_id: ID of second vector
-            metadata: Dictionary mapping vector IDs to their metadata
-            
-        Returns:
-            float: Weighted impact value
-        """
-        # Get vector metadata for weighting
-        v1_metadata = metadata.get(vector1_id, {})
-        v2_metadata = metadata.get(vector2_id, {})
-        
-        # Example weights based on metadata
-        recency_weight = 1.0
-        importance_weight = 1.0
-        
-        if 'timestamp' in v1_metadata and 'timestamp' in v2_metadata:
-            # More recent interactions have higher weight
-            time_diff = abs(v1_metadata['timestamp'] - v2_metadata['timestamp'])
-            recency_weight = 1.0 / (1.0 + 0.1 * time_diff)
-            
-        if 'importance' in v1_metadata and 'importance' in v2_metadata:
-            # Average importance of the two vectors
-            importance_weight = 0.5 * (v1_metadata['importance'] + v2_metadata['importance'])
-        
-        # Apply solidness factor - more solid vectors have less impact
-        v1_solidness = self.vector_solidness.get(vector1_id, 0)
-        v2_solidness = self.vector_solidness.get(vector2_id, 0)
-        solidness_modifier = 1.0 - 0.5 * (v1_solidness + v2_solidness)
-        
-        return base_impact * recency_weight * importance_weight * solidness_modifier
-    
-    def propagate_hierarchical_influence(self, vector_id: str, 
-                                        neighbors: Dict[str, np.ndarray],
-                                        all_vectors: Dict[str, np.ndarray],
-                                        depth: int = 1) -> Dict[str, float]:
-        """
-        Propagate influence through the network hierarchically.
-        
-        Args:
-            vector_id: ID of the source vector
-            neighbors: Dictionary of direct neighbor IDs to their embeddings
-            all_vectors: Dictionary of all vector IDs to their embeddings
-            depth: Current depth of propagation
-            
-        Returns:
-            Dict[str, float]: Dictionary mapping vector IDs to their influence values
-        """
-        if depth <= 0:
-            return {}
-            
-        # First-level influences
-        influences = {neighbor_id: 1.0 for neighbor_id in neighbors}
-        
-        # Propagate to next level with diminishing effect
-        if depth > 1:
-            for neighbor_id in neighbors:
-                # Get neighbors of this neighbor
-                second_neighbors = self.context_aggregator.get_context_neighbors(
-                    neighbor_id, all_vectors, exclude=[vector_id])
-                
-                # Recursive call with reduced depth
-                second_influences = self.propagate_hierarchical_influence(
-                    neighbor_id, second_neighbors, all_vectors, depth-1)
-                
-                # Add second-level influences with diminishing factor
-                for second_id, influence in second_influences.items():
-                    if second_id not in influences and second_id != vector_id:
-                        influences[second_id] = influence * 0.5  # Diminishing factor
-        
-        return influences
-    
-    def is_significant_impact(self, impact: float, threshold: float = 0.1) -> bool:
-        """
-        Determine if an impact is significant enough to consider.
-        
-        Args:
-            impact: The calculated impact value
-            threshold: Minimum threshold for significance
-            
-        Returns:
-            bool: True if impact is significant, False otherwise
-        """
-        return impact > threshold
-    
-    # not needed to update position within this directory 
-    def update_vector_positions(self, 
-                               batch_vectors: Dict[str, np.ndarray],
-                               all_vectors: Dict[str, np.ndarray],
-                               metadata: Dict[str, Dict[str, Any]],
-                               movement_history: Dict[str, List[np.ndarray]],
-                               iteration: int) -> Tuple[Dict[str, np.ndarray], float]:
-        """
-        Update vector positions based on contextual relationships.
-        
-        Args:
-            batch_vectors: Dictionary of vector IDs to embeddings for this batch
-            all_vectors: Dictionary of all vector IDs to embeddings
-            metadata: Dictionary of vector IDs to their metadata
-            movement_history: Dictionary of vector IDs to their movement history
-            iteration: Current iteration number
-            
-        Returns:
-            Tuple[Dict[str, np.ndarray], float]: Updated vectors and total energy
-        """
-        updates = {}
-        total_energy = 0
-        
-        for vector_id, vector in batch_vectors.items():
-            # Get local context (neighbors)
-            neighbors = self.context_aggregator.get_context_neighbors(
-                vector_id, all_vectors)
-            
-            # Calculate impact radius
-            impact_radius = self.calculate_impact_radius(vector_id, vector, neighbors)
-            
-            # Get hierarchical influences
-            influences = self.propagate_hierarchical_influence(
-                vector_id, neighbors, all_vectors, self.hierarchical_depth)
-            
-            # Calculate position update
-            update_vector = np.zeros_like(vector)
-            
-            for neighbor_id, influence in influences.items():
-                neighbor = all_vectors[neighbor_id]
-                
-                # Calculate impact
-                base_impact = self.calculate_initial_impact(vector, neighbor)
-                weighted_impact = self.calculate_weighted_impact(
-                    base_impact, vector_id, neighbor_id, metadata)
-                
-                # Apply sparse attention
-                if self.is_significant_impact(weighted_impact):
-                    # Direction of influence
-                    direction = neighbor - vector
-                    
-                    # Apply influence with diminishing factor
-                    update_vector += direction * weighted_impact * influence
-            
-            # Apply adaptive convergence
-            learning_rate = self.contexter.calculate_adaptive_learning_rate(
-                vector_id, movement_history.get(vector_id, []))
-            
-            # Apply negative feedback
-            feedback = self.contexter.calculate_negative_feedback(
-                vector_id, metadata.get(vector_id, {}))
-            
-            # Apply energy decay based on iteration
-            energy_factor = self.energy_decay_rate ** iteration
-            
-            # Final update
-            final_update = update_vector * learning_rate * feedback * energy_factor
-            
-            # Track energy (magnitude of movement)
-            update_energy = np.linalg.norm(final_update)
-            total_energy += update_energy
-            
-            # Update vector solidness based on movement
-            current_solidness = self.vector_solidness.get(vector_id, 0)
-            if update_energy < 0.01:  # Small movement increases solidness
-                new_solidness = min(1.0, current_solidness + self.solidness_factor)
-            else:  # Large movement decreases solidness
-                new_solidness = max(0.0, current_solidness - self.solidness_factor)
-            self.vector_solidness[vector_id] = new_solidness
-            
-            updates[vector_id] = vector + final_update
-        
-        return updates, total_energy
-    
-
-    # look if it is needed to reembed vectors within this function 
-    def reembed_vectors(self, 
-                       vectors: Dict[str, np.ndarray],
-                       metadata: Dict[str, Dict[str, Any]] = None,
-                       movement_history: Dict[str, List[np.ndarray]] = None,
-                       iterations: int = None) -> Dict[str, Any]:
-        """
-        Main method to reembed vectors.
-        
-        Args:
-            vectors: Dictionary of vector IDs to their embeddings
-            metadata: Dictionary of vector IDs to their metadata
-            movement_history: Dictionary of vector IDs to their movement history
-            iterations: Number of iterations to run
-            
-        Returns:
-            Dict[str, Any]: Metrics and updated vectors
-        """
-        if metadata is None:
-            metadata = {}
-        if movement_history is None:
-            movement_history = {}
-        if iterations is None:
-            iterations = self.max_iterations
-            
-        metrics = {
-            'iterations': iterations,
-            'energy_per_iteration': [],
-            'vectors_updated': 0
-        }
-        
-        updated_vectors = vectors.copy()
-        all_vector_ids = list(vectors.keys())
-        
-        for iteration in range(iterations):
-            # Process vectors in batches
-            total_iteration_energy = 0
-            
-            for i in range(0, len(all_vector_ids), self.batch_size):
-                batch_ids = all_vector_ids[i:i+self.batch_size]
-                batch_vectors = {vid: updated_vectors[vid] for vid in batch_ids}
-                
-                # Update positions
-                updates, batch_energy = self.update_vector_positions(
-                    batch_vectors, updated_vectors, metadata, movement_history, iteration)
-                total_iteration_energy += batch_energy
-                
-                # Apply updates
-                for vector_id, new_position in updates.items():
-                    updated_vectors[vector_id] = new_position
-                    
-                    # Update movement history
-                    if vector_id not in movement_history:
-                        movement_history[vector_id] = []
-                    movement_history[vector_id].append(new_position)
-                    
-                    metrics['vectors_updated'] += 1
-            
-            # Record energy for this iteration
-            metrics['energy_per_iteration'].append(total_iteration_energy)
-            
-            # Early stopping if energy is very low
-            if total_iteration_energy < 0.001 * len(all_vector_ids):
-                print(f"Converged after {iteration+1} iterations")
-                break
-        
-        metrics['updated_vectors'] = updated_vectors
-        metrics['final_solidness'] = self.vector_solidness
+        metrics = self.calculate_metrics(vector, metadata, context_vectors)
+        self.metrics_cache[vector_id] = metrics
         return metrics
-
-    def calculate_influence(self, vector_i: Vector, vector_j: Vector, context: Dict[str, Any]) -> float:
-        """
-        Calculate influence between two vectors considering context.
+        
+    def get_metrics(self, vector_id: str) -> VectorMetrics:
+        """Get cached metrics for a vector.
         
         Args:
-            vector_i: Source vector
-            vector_j: Target vector
-            context: Context information for the source vector
+            vector_id: ID of the vector
             
         Returns:
-            float: Influence score
+            Cached VectorMetrics or None if not found
         """
-        # Calculate base impact
-        base_impact = self.calculate_impact(vector_i, vector_j)
+        return self.metrics_cache.get(vector_id)
         
-        # Apply context-based weighting
-        context_weight = 1.0
-        
-        # Consider temporal context
-        if 'timestamp' in context:
-            current_time = time.time()
-            time_diff = abs(current_time - float(context['timestamp']))
-            context_weight *= 1.0 / (1.0 + 0.1 * time_diff)
-        
-        # Consider semantic context
-        if 'keywords' in context:
-            # If vectors share keywords, increase influence
-            if vector_j.metadata and 'keywords' in vector_j.metadata:
-                shared_keywords = set(context['keywords']) & set(vector_j.metadata['keywords'])
-                if shared_keywords:
-                    context_weight *= (1.0 + 0.2 * len(shared_keywords))
-        
-        # Consider structural context
-        if 'connections' in context:
-            # If vectors are connected, increase influence
-            if vector_j.id in context['connections']:
-                context_weight *= 1.5
-        
-        # Apply context weight to base impact
-        influence = base_impact * context_weight
-        
-        # Ensure influence is non-negative and capped at 1.0
-        return max(0.0, min(1.0, influence))
+    def clear_cache(self):
+        """Clear the metrics cache."""
+        self.metrics_cache.clear()
 
 # example usage 
